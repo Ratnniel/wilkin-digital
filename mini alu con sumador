@@ -1,3 +1,6 @@
+// ---------------------------
+// Full Adder 1 bit
+// ---------------------------
 module full_adder(
     input A, B, Cin,
     output S, Cout
@@ -32,46 +35,80 @@ module adder8(
 endmodule
 
 // ---------------------------
-// ALU con suma, resta, AND
-// SEL=00 -> suma
-// SEL=01 -> resta
-// SEL=10 -> A & B
+// ALU de 8 bits completa
 // ---------------------------
 module ALU_8bit(
     input  [7:0] A, B,
-    input  [1:0] SEL,       // selector de operación
-    output [7:0] RESULT,    // LEDs
-    output [3:0] FLAGS      // {Z, N, C, P}
+    input  [3:0] SEL,          // selector de operación
+    input  [2:0] imm,          // inmediato para ROL, ROR y suma inmediata
+    output [7:0] RESULT,       // LEDs
+    output [3:0] FLAGS         // {Z, N, C, P}
 );
-    wire [7:0] B_mux;
-    wire [7:0] sum;
-    wire carry;
+    // ---------------------------
+    // Suma / Resta
+    // ---------------------------
+    wire [7:0] B_mux = (SEL == 4'b0001) ? ~B : B;
+    wire Cin = (SEL == 4'b0001) ? 1'b1 : 1'b0;
 
-    // Para resta (SEL=01), usamos ~B y Cin=1
-    assign B_mux = (SEL == 2'b01) ? ~B : B;
-    wire Cin = (SEL == 2'b01) ? 1'b1 : 1'b0;
-
-    // Suma o resta
     wire [7:0] add_res;
     wire add_carry;
     adder8 SUMADOR(A, B_mux, Cin, add_res, add_carry);
 
-    // AND lógico
+    // ---------------------------
+    // Otras operaciones
+    // ---------------------------
     wire [7:0] and_res = A & B;
+    wire [7:0] or_res  = A | B;
+    wire [7:0] xor_res = A ^ B;
 
-    // Multiplexor para elegir operación
-    assign RESULT = (SEL == 2'b00) ? add_res :   // suma
-                    (SEL == 2'b01) ? add_res :   // resta
-                    (SEL == 2'b10) ? and_res :   // AND
-                    8'b00000000;                 // reservado
+    // Rotaciones
+    wire [7:0] rol_res = (A << imm) | (A >> (8 - imm));
+    wire [7:0] ror_res = (B >> imm) | (B << (8 - imm));
 
+    // Multiplicación (parte baja)
+    wire [15:0] mul_tmp;
+    wire [7:0] mul_res;
+    assign mul_tmp = A * B;
+    assign mul_res = mul_tmp[7:0];
+
+    // Comparación signed
+    wire [7:0] cmp_res = ($signed(A) < $signed(B)) ? 8'h01 : 8'h00;
+
+    // Suma inmediata
+    wire [7:0] add_imm_res = A + {4'b0000, imm};
+
+    // NOT
+    wire [7:0] not_res = ~A;
+
+    // ---------------------------
+    // Multiplexor principal
+    // ---------------------------
+    assign RESULT = (SEL == 4'b0000) ? add_res :
+                    (SEL == 4'b0001) ? add_res :
+                    (SEL == 4'b0010) ? and_res :
+                    (SEL == 4'b0011) ? or_res :
+                    (SEL == 4'b0100) ? xor_res :
+                    (SEL == 4'b0101) ? rol_res :
+                    (SEL == 4'b0110) ? ror_res :
+                    (SEL == 4'b0111) ? mul_res :
+                    (SEL == 4'b1000) ? cmp_res :
+                    (SEL == 4'b1001) ? add_imm_res :
+                    (SEL == 4'b1010) ? not_res :
+                    8'b00000000;
+
+    // ---------------------------
     // Carry solo en suma/resta
-    wire C_flag = (SEL[0] == 1'b0 && SEL[1] == 1'b0) ? add_carry :  // suma
-                  (SEL == 2'b01) ? add_carry : 1'b0;                // resta o AND
+    // ---------------------------
+    wire C_flag = (SEL == 4'b0000) ? add_carry :
+                  (SEL == 4'b0001) ? add_carry : 1'b0;
 
+    // ---------------------------
     // FLAGS = {Z, N, C, P}
+    // ---------------------------
     assign FLAGS[3] = (RESULT == 8'b0);  // Z
     assign FLAGS[2] = RESULT[7];         // N
     assign FLAGS[1] = C_flag;            // C
     assign FLAGS[0] = ~(^RESULT);        // P (1 si par)
 endmodule
+
+    
