@@ -32,13 +32,14 @@ module adder8(
 endmodule
 
 // ---------------------------
-// ALU con suma/resta
-// SEL=0 -> suma
-// SEL=1 -> resta
+// ALU con suma, resta, AND
+// SEL=00 -> suma
+// SEL=01 -> resta
+// SEL=10 -> A & B
 // ---------------------------
 module ALU_8bit(
     input  [7:0] A, B,
-    input  SEL,             // 0 = suma, 1 = resta
+    input  [1:0] SEL,       // selector de operación
     output [7:0] RESULT,    // LEDs
     output [3:0] FLAGS      // {Z, N, C, P}
 );
@@ -46,17 +47,31 @@ module ALU_8bit(
     wire [7:0] sum;
     wire carry;
 
-    // Si SEL=1 -> negamos B para la resta
-    assign B_mux = SEL ? ~B : B;
+    // Para resta (SEL=01), usamos ~B y Cin=1
+    assign B_mux = (SEL == 2'b01) ? ~B : B;
+    wire Cin = (SEL == 2'b01) ? 1'b1 : 1'b0;
 
-    // Carry-in = SEL (0 en suma, 1 en resta)
-    adder8 SUMADOR(A, B_mux, SEL, sum, carry);
+    // Suma o resta
+    wire [7:0] add_res;
+    wire add_carry;
+    adder8 SUMADOR(A, B_mux, Cin, add_res, add_carry);
 
-    assign RESULT = sum;
+    // AND lógico
+    wire [7:0] and_res = A & B;
+
+    // Multiplexor para elegir operación
+    assign RESULT = (SEL == 2'b00) ? add_res :   // suma
+                    (SEL == 2'b01) ? add_res :   // resta
+                    (SEL == 2'b10) ? and_res :   // AND
+                    8'b00000000;                 // reservado
+
+    // Carry solo en suma/resta
+    wire C_flag = (SEL[0] == 1'b0 && SEL[1] == 1'b0) ? add_carry :  // suma
+                  (SEL == 2'b01) ? add_carry : 1'b0;                // resta o AND
 
     // FLAGS = {Z, N, C, P}
-    assign FLAGS[3] = (sum == 8'b0); // Z
-    assign FLAGS[2] = sum[7];        // N
-    assign FLAGS[1] = carry;         // C
-    assign FLAGS[0] = ~(^sum);       // P (1 si par)
+    assign FLAGS[3] = (RESULT == 8'b0);  // Z
+    assign FLAGS[2] = RESULT[7];         // N
+    assign FLAGS[1] = C_flag;            // C
+    assign FLAGS[0] = ~(^RESULT);        // P (1 si par)
 endmodule
