@@ -1,0 +1,35 @@
+// src/alu4.v
+// ALU de 4 bits completa: AND, OR, XOR, SUMA, RESTA, SHL, SHR, COMP
+
+module alu4 (
+    input  [3:0] a,
+    input  [3:0] b,
+    input  [2:0] op,
+    output [3:0] y,
+    output       carry,
+    output       zero
+);
+
+    // Carry para desplazamientos
+    wire shift_left_carry  = a[3];
+    wire shift_right_carry = a[0];
+
+    assign y = (op == 3'b000) ? (a & b) :
+               (op == 3'b001) ? (a | b) :
+               (op == 3'b010) ? (a ^ b) :
+               (op == 3'b011) ? (a + b) :
+               (op == 3'b100) ? (a - b) :
+               (op == 3'b101) ? (a << 1) :
+               (op == 3'b110) ? (a >> 1) :
+               (op == 3'b111) ? ((a == b) ? 4'b0001 : 4'b0000) :
+               4'b0000;
+
+    assign carry = (op == 3'b011) ? ((a + b) > 4'b1111) :
+                   (op == 3'b100) ? (a >= b) :
+                   (op == 3'b101) ? shift_left_carry :
+                   (op == 3'b110) ? shift_right_carry :
+                   1'b0;
+
+    assign zero = (y == 4'b0000);
+
+endmodule
