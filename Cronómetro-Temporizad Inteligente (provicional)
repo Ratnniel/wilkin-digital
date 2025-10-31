@@ -1,0 +1,243 @@
+// ========================
+// Cronómetro-Temporizador Inteligente (CTI) - Versión corregida
+// ========================
+module CTI (
+    input clk,          // reloj principal (50 MHz)
+    input rst_n,        // reset asíncrono activo bajo
+    input btn_start,    // botón start/pause
+    input btn_mode,     // alternar modo UP/DOWN
+    output [6:0] seg0,  // unidades segundos
+    output [6:0] seg1,  // decenas segundos
+    output [6:0] seg2,  // unidades minutos
+    output [6:0] seg3,  // decenas minutos
+    output buzzer       // salida de alarma
+);
+
+    // --------------------
+    // 1. Detectores de flancos
+    // --------------------
+    wire start_pulse, mode_pulse;
+    pulse_detector u_start(.clk(clk), .btn_in(btn_start), .pulse(start_pulse));
+    pulse_detector u_mode (.clk(clk), .btn_in(btn_mode),  .pulse(mode_pulse));
+
+    // --------------------
+    // 2. Divisor de reloj 50MHz -> 1Hz
+    // --------------------
+    wire tick_1s;
+    clk_div u_clk(.clk(clk), .rst_n(rst_n), .tick_1s(tick_1s));
+
+    // --------------------
+    // 3. FSM principal
+    // --------------------
+    reg [1:0] state, next_state;
+    reg up_down;          // 1 = UP, 0 = DOWN
+    reg en_counter;       // habilita contador
+    reg alarm_enable;     // habilita buzzer
+
+    localparam IDLE  = 2'b00,
+               RUN   = 2'b01,
+               PAUSE = 2'b10,
+               ALARM = 2'b11;
+
+    // done_sec ahora es wire
+    wire done_sec;
+
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n) begin
+            state <= IDLE;
+            up_down <= 1; // por defecto UP
+        end else begin
+            state <= next_state;
+            // Alternar modo solo en IDLE o PAUSE
+            if(mode_pulse && (state == IDLE || state == PAUSE))
+                up_down <= ~up_down;
+        end
+    end
+
+    always @(*) begin
+        next_state = state;
+        en_counter = 0;
+        alarm_enable = 0;
+
+        case(state)
+            IDLE: begin
+                if(start_pulse) next_state = RUN;
+            end
+            RUN: begin
+                en_counter = 1;
+                if(done_sec) next_state = ALARM;
+                if(start_pulse) next_state = PAUSE;
+            end
+            PAUSE: begin
+                if(start_pulse) next_state = RUN;
+            end
+            ALARM: begin
+                alarm_enable = 1;
+                if(start_pulse) next_state = IDLE;
+            end
+        endcase
+    end
+
+    // --------------------
+    // 4. Contadores BCD mm:ss
+    // --------------------
+    wire [3:0] s0,s1,m0,m1;
+    bcd_counter u_counter(
+        .clk(tick_1s),
+        .rst_n(rst_n),
+        .en(en_counter),
+        .up(up_down),
+        .s0(s0), .s1(s1), .m0(m0), .m1(m1),
+        .done(done_sec) // conectamos como wire
+    );
+
+    // --------------------
+    // 5. LFSR buzzer
+    // --------------------
+    lfsr_buzzer u_buzzer(.clk(clk), .rst_n(rst_n), .enable(alarm_enable), .buzz(buzzer));
+
+    // --------------------
+    // 6. Display 7 segmentos
+    // --------------------
+    mux_7seg u_disp(.s0(s0), .s1(s1), .m0(m0), .m1(m1),
+                    .seg0(seg0), .seg1(seg1), .seg2(seg2), .seg3(seg3));
+
+endmodule
+
+// ========================
+// Detector de flanco (1 ciclo) - push button
+// ========================
+module pulse_detector(
+    input clk,
+    input btn_in,
+    output reg pulse
+);
+    reg btn_sync_0, btn_sync_1;
+    reg btn_prev;
+
+    always @(posedge clk) begin
+        btn_sync_0 <= btn_in;
+        btn_sync_1 <= btn_sync_0;
+        pulse <= btn_sync_1 & ~btn_prev;
+        btn_prev <= btn_sync_1;
+    end
+endmodule
+
+// ========================
+// Divisor de reloj 50MHz -> 1Hz
+// ========================
+module clk_div(
+    input clk, 
+    input rst_n,
+    output reg tick_1s
+);
+    reg [25:0] cnt;
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n) begin
+            cnt <= 0;
+            tick_1s <= 0;
+        end else if(cnt == 50_000_000/2 - 1) begin
+            cnt <= 0;
+            tick_1s <= ~tick_1s;
+        end else cnt <= cnt + 1;
+    end
+endmodule
+
+// ========================
+// Contador BCD mm:ss
+// ========================
+module bcd_counter(
+    input clk,
+    input rst_n,
+    input en,
+    input up,      // 1 = contar hacia arriba, 0 = contar hacia abajo
+    output reg [3:0] s0, s1, m0, m1,
+    output reg done
+);
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n) begin
+            s0 <= 0; s1 <= 0; m0 <= 0; m1 <= 0; done <= 0;
+        end else if(en) begin
+            done <= 0;
+            if(up) begin
+                s0 <= (s0 == 9) ? 0 : s0 + 1;
+                if(s0 == 9) begin
+                    s1 <= (s1 == 5) ? 0 : s1 + 1;
+                    if(s1 == 5 && s0 == 9) begin
+                        m0 <= (m0 == 9) ? 0 : m0 + 1;
+                        if(m0 == 9 && s1 == 5 && s0 == 9) begin
+                            m1 <= (m1 == 5) ? 0 : m1 + 1;
+                            if(m1 == 5) done <= 1;
+                        end
+                    end
+                end
+            end else begin
+                if({m1,m0,s1,s0} == 0) done <= 1;
+                else begin
+                    if(s0 == 0) begin
+                        s0 <= 9;
+                        if(s1 == 0) begin
+                            s1 <= 5;
+                            if(m0 == 0) begin
+                                m0 <= 9;
+                                if(m1 != 0) m1 <= m1 - 1;
+                            end else m0 <= m0 - 1;
+                        end else s1 <= s1 - 1;
+                    end else s0 <= s0 - 1;
+                end
+            end
+        end
+    end
+endmodule
+
+// ========================
+// LFSR pseudoaleatorio para buzzer
+// ========================
+module lfsr_buzzer(
+    input clk,
+    input rst_n,
+    input enable,
+    output reg buzz
+);
+    reg [7:0] lfsr;
+
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n) lfsr <= 8'hAA;
+        else if(enable) begin
+            lfsr <= {lfsr[6:0], lfsr[7]^lfsr[5]};
+            buzz <= lfsr[0];
+        end else buzz <= 0;
+    end
+endmodule
+
+// ========================
+// Conversor BCD -> 7 segmentos
+// ========================
+module mux_7seg(
+    input [3:0] s0,s1,m0,m1,
+    output reg [6:0] seg0,seg1,seg2,seg3
+);
+    function [6:0] seg7;
+        input [3:0] bcd;
+        case(bcd)
+            4'd0: seg7 = 7'b1111110;
+            4'd1: seg7 = 7'b0110000;
+            4'd2: seg7 = 7'b1101101;
+            4'd3: seg7 = 7'b1111001;
+            4'd4: seg7 = 7'b0110011;
+            4'd5: seg7 = 7'b1011011;
+            4'd6: seg7 = 7'b1011111;
+            4'd7: seg7 = 7'b1110000;
+            4'd8: seg7 = 7'b1111111;
+            4'd9: seg7 = 7'b1111011;
+            default: seg7 = 7'b1111111;
+        endcase
+    endfunction
+
+    always @(*) begin
+        seg0 = seg7(s0);
+        seg1 = seg7(s1);
+        seg2 = seg7(m0);
+        seg3 = seg7(m1);
+    end
+endmodule
