@@ -1,0 +1,119 @@
+module cronometro_temporizador_alarma (
+    input wire clk,          // Reloj FPGA
+    input wire btn_start,    // Botón de inicio/reinicio
+    input wire btn_pause,    // Botón de pausa/reanudar
+    input wire btn_mode,     // Botón para cambiar modo cronómetro/temporizador
+    output reg [6:0] seg0,   // Display unidades de segundos
+    output reg [6:0] seg1,   // Display decenas de segundos
+    output reg [6:0] seg2,   // Display unidades de minutos
+    output reg [6:0] seg3,   // Display decenas de minutos
+    output reg alarm          // Salida de alarma (buzzer/LED)
+);
+
+    // ---- Divisor de reloj a 1Hz (clk=50MHz) ----
+    reg [25:0] counter_clk = 0; 
+    reg clk_1hz = 0;
+
+    always @(posedge clk) begin
+        if (counter_clk >= 50_000_000/2 - 1) begin
+            counter_clk <= 0;
+            clk_1hz <= ~clk_1hz;
+        end else begin
+            counter_clk <= counter_clk + 1;
+        end
+    end
+
+    // ---- Contadores ----
+    reg [5:0] segundos = 0;
+    reg [5:0] minutos  = 0;
+    reg running = 0;
+    reg mode = 0; // 0 = cronómetro, 1 = temporizador
+
+    // ---- Debounce simple de botones ----
+    reg btn_start_last = 0;
+    reg btn_pause_last = 0;
+    reg btn_mode_last  = 0;
+
+    always @(posedge clk_1hz) begin
+        // ---- Botón start ----
+        if (btn_start && !btn_start_last) begin
+            segundos <= 0;
+            minutos <= 0;
+            running <= 1; // comienza a contar
+        end
+        btn_start_last <= btn_start;
+
+        // ---- Botón pause ----
+        if (btn_pause && !btn_pause_last)
+            running <= ~running;
+        btn_pause_last <= btn_pause;
+
+        // ---- Botón mode ----
+        if (btn_mode && !btn_mode_last)
+            mode <= ~mode; // alterna modo
+        btn_mode_last <= btn_mode;
+
+        // ---- Conteo ----
+        if (running) begin
+            if (mode == 0) begin
+                // ---- Cronómetro ----
+                if (segundos == 59) begin
+                    segundos <= 0;
+                    if (minutos == 59)
+                        minutos <= 0;
+                    else
+                        minutos <= minutos + 1;
+                end else begin
+                    segundos <= segundos + 1;
+                end
+            end else begin
+                // ---- Temporizador ----
+                if (segundos == 0 && minutos == 0) begin
+                    running <= 0; // detener al llegar a 00:00
+                end else if (segundos == 0) begin
+                    segundos <= 59;
+                    minutos <= minutos - 1;
+                end else begin
+                    segundos <= segundos - 1;
+                end
+            end
+        end
+    end
+
+    // ---- Alarma ----
+    always @(*) begin
+        if (mode == 1 && segundos == 0 && minutos == 0)
+            alarm = 1; // activa cuando llega a 00:00 en temporizador
+        else
+            alarm = 0;
+    end
+
+    // ---- Decodificador 7 segmentos ----
+    function [6:0] digito7seg;
+        input [3:0] d;
+        begin
+            case(d)
+                0: digito7seg = 7'b0111111;
+                1: digito7seg = 7'b0000110;
+                2: digito7seg = 7'b1011011;
+                3: digito7seg = 7'b1001111;
+                4: digito7seg = 7'b1100110;
+                5: digito7seg = 7'b1101101;
+                6: digito7seg = 7'b1111101;
+                7: digito7seg = 7'b0000111;
+                8: digito7seg = 7'b1111111;
+                9: digito7seg = 7'b1100111;
+                default: digito7seg = 7'b1111111;
+            endcase
+        end
+    endfunction
+
+    // ---- Asignar a displays ----
+    always @(*) begin
+        seg0 = digito7seg(segundos % 10);
+        seg1 = digito7seg(segundos / 10);
+        seg2 = digito7seg(minutos % 10);
+        seg3 = digito7seg(minutos / 10);
+    end
+
+endmodule
