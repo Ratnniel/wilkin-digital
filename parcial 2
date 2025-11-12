@@ -1,0 +1,145 @@
+module sensordecontrol (
+    input  wire clk,          // reloj FPGA
+    input  wire rst_n,        // reset general activo bajo
+    input  wire ldr1_in,      // 1 = luz, 0 = tapada
+    input  wire ldr2_in,      // 1 = luz, 0 = tapada
+    input  wire ptc_in,       // 1 = calor detectado
+    input  wire dip_reset1,   // reset contador independiente
+    output reg  led1_out,
+    output reg  led2_out,
+    output reg  motor_left,   // salida para motor giro izquierda
+    output reg  motor_right,  // salida para motor giro derecha
+    output reg [6:0] seg_dec, // display decenas
+    output reg [6:0] seg_uni  // display unidades
+);
+
+    // ==================================================
+    // GENERADOR DE PARPADEO (~1 Hz)
+    // ==================================================
+    reg [23:0] counter;
+    wire blink;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            counter <= 24'd0;
+        else
+            counter <= counter + 1'b1;
+    end
+
+    assign blink = counter[23];
+
+    // ==================================================
+    // CONTROL DE LEDs Y MOTOR (PRIORIDAD + PTC)
+    // ==================================================
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            led1_out   <= 1'b0;
+            led2_out   <= 1'b0;
+            motor_left <= 1'b0;
+            motor_right<= 1'b0;
+        end else begin
+            if (ptc_in) begin
+                //  Modo calor: LEDs parpadean y motor apagado
+                led1_out   <= blink;
+                led2_out   <= blink;
+                motor_left <= 1'b0;
+                motor_right<= 1'b0;
+            end else begin
+                //  Prioridad entre LDRs (solo una activa a la vez)
+                case ({ldr1_in, ldr2_in})
+                    2'b10: begin
+                        // LDR1 tapada → LED1 encendido, motor izquierda
+                        led1_out   <= 1'b1;
+                        led2_out   <= 1'b0;
+                        motor_left <= 1'b1;
+                        motor_right<= 1'b0;
+                    end
+                    2'b01: begin
+                        // LDR2 tapada → LED2 encendido, motor derecha
+                        led1_out   <= 1'b0;
+                        led2_out   <= 1'b1;
+                        motor_left <= 1'b0;
+                        motor_right<= 1'b1;
+                    end
+                    default: begin
+                        // Ninguna o ambas tapadas → todo apagado
+                        led1_out   <= 1'b0;
+                        led2_out   <= 1'b0;
+                        motor_left <= 1'b0;
+                        motor_right<= 1'b0;
+                    end
+                endcase
+            end
+        end
+    end
+
+    // ==================================================
+    // CONTADOR (0–99)
+    // ==================================================
+    reg ldr1_prev, ldr2_prev;
+    reg [6:0] count;
+    wire ldr1_falling = (ldr1_prev == 1'b1 && ldr1_in == 1'b0);
+    wire ldr2_falling = (ldr2_prev == 1'b1 && ldr2_in == 1'b0);
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ldr1_prev <= 1'b0;
+            ldr2_prev <= 1'b0;
+        end else begin
+            ldr1_prev <= ldr1_in;
+            ldr2_prev <= ldr2_in;
+        end
+    end
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            count <= 7'd0;
+        else if (dip_reset1)
+            count <= 7'd0;
+        else if (ldr1_falling || ldr2_falling) begin
+            if (count == 7'd99)
+                count <= 7'd0;
+            else
+                count <= count + 1'b1;
+        end
+    end
+
+    // ==================================================
+    // DECODIFICADOR 7 SEGMENTOS
+    // ==================================================
+    wire [3:0] decenas = count / 10;
+    wire [3:0] unidades = count % 10;
+
+    always @(*) begin
+        case (decenas)
+            4'd0: seg_dec = 7'b0111111;
+            4'd1: seg_dec = 7'b0000110;
+            4'd2: seg_dec = 7'b1011011;
+            4'd3: seg_dec = 7'b1001111;
+            4'd4: seg_dec = 7'b1100110;
+            4'd5: seg_dec = 7'b1101101;
+            4'd6: seg_dec = 7'b1111101;
+            4'd7: seg_dec = 7'b0000111;
+            4'd8: seg_dec = 7'b1111111;
+            4'd9: seg_dec = 7'b1100111;
+            default: seg_dec = 7'b0000000;
+        endcase
+    end
+
+    always @(*) begin
+        case (unidades)
+            4'd0: seg_uni = 7'b0111111;
+            4'd1: seg_uni = 7'b0000110;
+            4'd2: seg_uni = 7'b1011011;
+            4'd3: seg_uni = 7'b1001111;
+            4'd4: seg_uni = 7'b1100110;
+            4'd5: seg_uni = 7'b1101101;
+            4'd6: seg_uni = 7'b1111101;
+            4'd7: seg_uni = 7'b0000111;
+            4'd8: seg_uni = 7'b1111111;
+            4'd9: seg_uni = 7'b1100111;
+            default: seg_uni = 7'b0000000;
+        endcase
+    end
+
+endmodule
