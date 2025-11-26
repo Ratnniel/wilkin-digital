@@ -1,0 +1,159 @@
+module semaforo_doble_via (
+    input  wire clk,
+    input  wire rst_n,
+
+    // NORTE-SUR
+    output reg green_ns,
+    output reg yellow_ns,
+    output reg red_ns,
+
+    // ESTE-OESTE
+    output reg green_eo,
+    output reg yellow_eo,
+    output reg red_eo
+);
+
+    // -------------------------------------------------
+    // TIEMPOS (50 MHz)
+    // -------------------------------------------------
+    localparam GREEN_TIME  = 36'd3500000000; // 70s
+    localparam YELLOW_TIME = 36'd1000000000; // 20s
+    localparam RED_TIME    = 36'd4500000000; // 90s
+
+    // -------------------------------------------------
+    // ESTADOS
+    // -------------------------------------------------
+    localparam S_GREEN  = 2'd0;
+    localparam S_YELLOW = 2'd1;
+    localparam S_RED    = 2'd2;
+
+    reg [1:0] state_ns;
+    reg [1:0] state_eo;
+    reg [35:0] count;
+
+    // -------------------------------------------------
+    // LÓGICA PRINCIPAL
+    // -------------------------------------------------
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            // NS arranca en verde
+            state_ns <= S_GREEN;
+            // EO arranca en rojo
+            state_eo <= S_RED;
+
+            count <= 0;
+
+            green_ns  <= 1;
+            yellow_ns <= 0;
+            red_ns    <= 0;
+
+            green_eo  <= 0;
+            yellow_eo <= 0;
+            red_eo    <= 1;
+        end else begin
+            case (state_ns)
+
+                // -------------------------------------------------
+                // NS VERDE — EO ROJO
+                // -------------------------------------------------
+                S_GREEN: begin
+                    green_ns  <= 1;
+                    yellow_ns <= 0;
+                    red_ns    <= 0;
+
+                    green_eo  <= 0;
+                    yellow_eo <= 0;
+                    red_eo    <= 1;
+
+                    if (count < GREEN_TIME)
+                        count <= count + 1;
+                    else begin
+                        state_ns <= S_YELLOW;
+                        state_eo <= S_RED; // EO sigue en rojo
+                        count <= 0;
+                    end
+                end
+
+                // -------------------------------------------------
+                // NS AMARILLO — EO ROJO
+                // -------------------------------------------------
+                S_YELLOW: begin
+                    green_ns  <= 0;
+                    yellow_ns <= 1;
+                    red_ns    <= 0;
+
+                    green_eo  <= 0;
+                    yellow_eo <= 0;
+                    red_eo    <= 1;
+
+                    if (count < YELLOW_TIME)
+                        count <= count + 1;
+                    else begin
+                        state_ns <= S_RED;
+                        state_eo <= S_GREEN; // EO pasa a verde
+                        count <= 0;
+                    end
+                end
+
+                // -------------------------------------------------
+                // NS ROJO — EO VERDE / AMARILLO
+                // -------------------------------------------------
+                S_RED: begin
+                    green_ns  <= 0;
+                    yellow_ns <= 0;
+                    red_ns    <= 1;
+
+                    // EO depende de su estado
+                    case (state_eo)
+
+                        // EO VERDE 70s
+                        S_GREEN: begin
+                            green_eo  <= 1;
+                            yellow_eo <= 0;
+                            red_eo    <= 0;
+
+                            if (count < GREEN_TIME)
+                                count <= count + 1;
+                            else begin
+                                state_eo <= S_YELLOW;
+                                count <= 0;
+                            end
+                        end
+
+                        // EO AMARILLO 20s
+                        S_YELLOW: begin
+                            green_eo  <= 0;
+                            yellow_eo <= 1;
+                            red_eo    <= 0;
+
+                            if (count < YELLOW_TIME)
+                                count <= count + 1;
+                            else begin
+                                state_eo <= S_RED;   // EO pasa a rojo
+                                state_ns <= S_GREEN; // NS vuelve a verde
+                                count <= 0;
+                            end
+                        end
+
+                        // EO ROJO (solo al inicio)
+                        S_RED: begin
+                            green_eo  <= 0;
+                            yellow_eo <= 0;
+                            red_eo    <= 1;
+
+                            if (count < RED_TIME)
+                                count <= count + 1;
+                            else begin
+                                state_ns <= S_GREEN;
+                                state_eo <= S_RED;
+                                count <= 0;
+                            end
+                        end
+
+                    endcase
+                end
+
+            endcase
+        end
+    end
+endmodule
