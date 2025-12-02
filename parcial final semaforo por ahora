@@ -19,7 +19,15 @@ module semaforo_doble_via_ldr_simple (
 
     // DISPLAY 7 SEGMENTOS EO (NUEVO – CÁTODO COMÚN)
     output reg [6:0] seg_dec_eo,
-    output reg [6:0] seg_uni_eo
+    output reg [6:0] seg_uni_eo,
+
+    // LUCES PEATONALES NS
+    output reg ped_ns_verde,
+    output reg ped_ns_rojo,
+
+    // LUCES PEATONALES EO
+    output reg ped_eo_verde,
+    output reg ped_eo_rojo
 );
 
     // ============================================================
@@ -65,7 +73,6 @@ module semaforo_doble_via_ldr_simple (
     // CONTADORES NS
     // ============================================================
 
-    // Verde 70
     reg [7:0] timer_ns = 70;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
@@ -77,7 +84,6 @@ module semaforo_doble_via_ldr_simple (
             timer_ns <= 70;
     end
 
-    // Amarillo 20
     reg [7:0] timer_ns_yellow = 20;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
@@ -89,7 +95,6 @@ module semaforo_doble_via_ldr_simple (
             timer_ns_yellow <= 20;
     end
 
-    // Rojo 90
     reg [7:0] timer_ns_red = 90;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
@@ -101,9 +106,8 @@ module semaforo_doble_via_ldr_simple (
             timer_ns_red <= 90;
     end
 
-
     // ============================================================
-    // 🔥 CONTADORES EO (70 / 20 / 90)
+    // CONTADORES EO
     // ============================================================
 
     reg [7:0] timer_eo_green = 70;
@@ -156,7 +160,7 @@ module semaforo_doble_via_ldr_simple (
     wire [3:0] unidades = display_value % 10;
 
     // ============================================================
-    // SELECCIÓN VALOR DISPLAY EO (NUEVO)
+    // SELECCIÓN VALOR DISPLAY EO
     // ============================================================
     reg [7:0] display_value_eo;
     always @(*) begin
@@ -214,7 +218,7 @@ module semaforo_doble_via_ldr_simple (
     end
 
     // ============================================================
-    // LÓGICA DEL SEMÁFORO ORIGINAL (SIN MODIFICAR)
+    // LÓGICA DEL SEMÁFORO ORIGINAL
     // ============================================================
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -310,4 +314,57 @@ module semaforo_doble_via_ldr_simple (
             end
         end
     end
+
+    // ============================================================
+    // LUCES PEATONALES NS
+    // ============================================================
+    always @(*) begin
+        if (ldr == 0) begin
+            ped_ns_verde = 0;
+            ped_ns_rojo  = 0;
+        end else begin
+            case (state_ns)
+                S_RED:    begin
+                    ped_ns_verde = 1;  // verde peatonal
+                    ped_ns_rojo  = 0;
+                end
+                S_GREEN,
+                S_YELLOW: begin
+                    ped_ns_verde = 0;
+                    ped_ns_rojo  = 1;  // rojo peatonal
+                end
+                default: begin
+                    ped_ns_verde = 0;
+                    ped_ns_rojo  = 1;
+                end
+            endcase
+        end
+    end
+
+    // ============================================================
+    // LUCES PEATONALES EO
+    // ============================================================
+    always @(*) begin
+        if (ldr == 0) begin
+            ped_eo_verde = 0;
+            ped_eo_rojo  = 0;
+        end else begin
+            case (state_eo)
+                S_RED:    begin
+                    ped_eo_verde = 1;  // verde peatonal
+                    ped_eo_rojo  = 0;
+                end
+                S_GREEN,
+                S_YELLOW: begin
+                    ped_eo_verde = 0;
+                    ped_eo_rojo  = 1;  // rojo peatonal
+                end
+                default: begin
+                    ped_eo_verde = 0;
+                    ped_eo_rojo  = 1;
+                end
+            endcase
+        end
+    end
+
 endmodule
