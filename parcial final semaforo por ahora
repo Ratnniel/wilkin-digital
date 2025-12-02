@@ -1,0 +1,313 @@
+module semaforo_doble_via_ldr_simple (
+    input  wire clk,       // 50 MHz
+    input  wire rst_n,     // Reset activo bajo
+    input  wire ldr,       // 1 = luz, 0 = oscuro
+
+    // SEMÁFOROS NS
+    output reg green_ns,
+    output reg yellow_ns,
+    output reg red_ns,
+
+    // SEMÁFOROS EO
+    output reg green_eo,
+    output reg yellow_eo,
+    output reg red_eo,
+
+    // DISPLAY 7 SEGMENTOS NS (CÁTODO COMÚN)
+    output reg [6:0] seg_dec,
+    output reg [6:0] seg_uni,
+
+    // DISPLAY 7 SEGMENTOS EO (NUEVO – CÁTODO COMÚN)
+    output reg [6:0] seg_dec_eo,
+    output reg [6:0] seg_uni_eo
+);
+
+    // ============================================================
+    //  Tiempos originales
+    // ============================================================
+    localparam GREEN_TIME  = 36'd3500000000; 
+    localparam YELLOW_TIME = 36'd1000000000; 
+    localparam RED_TIME    = 36'd4500000000; 
+    localparam BLINK_TIME  = 36'd25000000;   
+
+    // Estados
+    localparam S_GREEN  = 2'd0;
+    localparam S_YELLOW = 2'd1;
+    localparam S_RED    = 2'd2;
+
+    reg [1:0] state_ns;
+    reg [1:0] state_eo;
+    reg [35:0] count;
+    reg yellow_on;
+
+    // ============================================================
+    // DIVISOR 1 HZ
+    // ============================================================
+    reg [25:0] div_count = 0;
+    reg tick_1s = 0;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            div_count <= 0;
+            tick_1s <= 0;
+        end else begin
+            if (div_count == 49999999) begin
+                div_count <= 0;
+                tick_1s <= 1;
+            end else begin
+                div_count <= div_count + 1;
+                tick_1s <= 0;
+            end
+        end
+    end
+
+    // ============================================================
+    // CONTADORES NS
+    // ============================================================
+
+    // Verde 70
+    reg [7:0] timer_ns = 70;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            timer_ns <= 70;
+        else if (ldr == 1 && state_ns == S_GREEN) begin
+            if (tick_1s && timer_ns > 1)
+                timer_ns <= timer_ns - 1;
+        end else
+            timer_ns <= 70;
+    end
+
+    // Amarillo 20
+    reg [7:0] timer_ns_yellow = 20;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            timer_ns_yellow <= 20;
+        else if (ldr == 1 && state_ns == S_YELLOW) begin
+            if (tick_1s && timer_ns_yellow > 1)
+                timer_ns_yellow <= timer_ns_yellow - 1;
+        end else
+            timer_ns_yellow <= 20;
+    end
+
+    // Rojo 90
+    reg [7:0] timer_ns_red = 90;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            timer_ns_red <= 90;
+        else if (ldr == 1 && state_ns == S_RED) begin
+            if (tick_1s && timer_ns_red > 1)
+                timer_ns_red <= timer_ns_red - 1;
+        end else
+            timer_ns_red <= 90;
+    end
+
+
+    // ============================================================
+    // 🔥 CONTADORES EO (70 / 20 / 90)
+    // ============================================================
+
+    reg [7:0] timer_eo_green = 70;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            timer_eo_green <= 70;
+        else if (ldr == 1 && state_eo == S_GREEN) begin
+            if (tick_1s && timer_eo_green > 1)
+                timer_eo_green <= timer_eo_green - 1;
+        end else
+            timer_eo_green <= 70;
+    end
+
+    reg [7:0] timer_eo_yellow = 20;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            timer_eo_yellow <= 20;
+        else if (ldr == 1 && state_eo == S_YELLOW) begin
+            if (tick_1s && timer_eo_yellow > 1)
+                timer_eo_yellow <= timer_eo_yellow - 1;
+        end else
+            timer_eo_yellow <= 20;
+    end
+
+    reg [7:0] timer_eo_red = 90;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            timer_eo_red <= 90;
+        else if (ldr == 1 && state_eo == S_RED) begin
+            if (tick_1s && timer_eo_red > 1)
+                timer_eo_red <= timer_eo_red - 1;
+        end else
+            timer_eo_red <= 90;
+    end
+
+    // ============================================================
+    // SELECCIÓN VALOR DISPLAY NS
+    // ============================================================
+    reg [7:0] display_value;
+    always @(*) begin
+        case(state_ns)
+            S_GREEN:  display_value = timer_ns;
+            S_YELLOW: display_value = timer_ns_yellow;
+            S_RED:    display_value = timer_ns_red;
+            default:  display_value = 0;
+        endcase
+    end
+
+    wire [3:0] decenas  = display_value / 10;
+    wire [3:0] unidades = display_value % 10;
+
+    // ============================================================
+    // SELECCIÓN VALOR DISPLAY EO (NUEVO)
+    // ============================================================
+    reg [7:0] display_value_eo;
+    always @(*) begin
+        case(state_eo)
+            S_GREEN:  display_value_eo = timer_eo_green;
+            S_YELLOW: display_value_eo = timer_eo_yellow;
+            S_RED:    display_value_eo = timer_eo_red;
+            default:  display_value_eo = 0;
+        endcase
+    end
+
+    wire [3:0] decenas_eo  = display_value_eo / 10;
+    wire [3:0] unidades_eo = display_value_eo % 10;
+
+    // ============================================================
+    // DECODER 7 SEGMENTOS (CÁTODO)
+    // ============================================================
+    function [6:0] decode(input [3:0] num);
+        case (num)
+            4'd0: decode = 7'b1111110;
+            4'd1: decode = 7'b0110000;
+            4'd2: decode = 7'b1101101;
+            4'd3: decode = 7'b1111001;
+            4'd4: decode = 7'b0110011;
+            4'd5: decode = 7'b1011011;
+            4'd6: decode = 7'b1011111;
+            4'd7: decode = 7'b1110000;
+            4'd8: decode = 7'b1111111;
+            4'd9: decode = 7'b1110011;
+            default: decode = 7'b0000000;
+        endcase
+    endfunction
+
+    // ============================================================
+    // APAGADO DISPLAY POR LDR (AMBOS)
+    // ============================================================
+    always @(*) begin
+        if (ldr == 0) begin
+            seg_dec = 7'b0000000;
+            seg_uni = 7'b0000000;
+        end else begin
+            seg_dec = decode(decenas);
+            seg_uni = decode(unidades);
+        end
+    end
+
+    always @(*) begin
+        if (ldr == 0) begin
+            seg_dec_eo = 7'b0000000;
+            seg_uni_eo = 7'b0000000;
+        end else begin
+            seg_dec_eo = decode(decenas_eo);
+            seg_uni_eo = decode(unidades_eo);
+        end
+    end
+
+    // ============================================================
+    // LÓGICA DEL SEMÁFORO ORIGINAL (SIN MODIFICAR)
+    // ============================================================
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            state_ns <= S_GREEN;
+            state_eo <= S_RED;
+            count <= 0;
+
+            green_ns  <= 1; yellow_ns <= 0; red_ns <= 0;
+            green_eo  <= 0; yellow_eo <= 0; red_eo <= 1;
+            yellow_on <= 0;
+        end else begin
+            if (ldr == 0) begin
+                if (count < BLINK_TIME)
+                    count <= count + 1;
+                else begin
+                    yellow_on <= ~yellow_on;
+                    count <= 0;
+                end
+
+                green_ns  <= 0;
+                red_ns    <= 0;
+                green_eo  <= 0;
+                red_eo    <= 0;
+                yellow_ns <= yellow_on;
+                yellow_eo <= yellow_on;
+
+            end else begin
+                case (state_ns)
+
+                    S_GREEN: begin
+                        green_ns  <= 1; yellow_ns <= 0; red_ns <= 0;
+                        green_eo  <= 0; yellow_eo <= 0; red_eo <= 1;
+
+                        if (count < GREEN_TIME)
+                            count <= count + 1;
+                        else begin
+                            state_ns <= S_YELLOW;
+                            state_eo <= S_RED;
+                            count <= 0;
+                        end
+                    end
+
+                    S_YELLOW: begin
+                        green_ns  <= 0; yellow_ns <= 1; red_ns <= 0;
+                        green_eo  <= 0; yellow_eo <= 0; red_eo <= 1;
+
+                        if (count < YELLOW_TIME)
+                            count <= count + 1;
+                        else begin
+                            state_ns <= S_RED;
+                            state_eo <= S_GREEN;
+                            count <= 0;
+                        end
+                    end
+
+                    S_RED: begin
+                        green_ns  <= 0; yellow_ns <= 0; red_ns <= 1;
+
+                        case (state_eo)
+                            S_GREEN: begin
+                                green_eo  <= 1; yellow_eo <= 0; red_eo <= 0;
+                                if (count < GREEN_TIME)
+                                    count <= count + 1;
+                                else begin
+                                    state_eo <= S_YELLOW;
+                                    count <= 0;
+                                end
+                            end
+                            S_YELLOW: begin
+                                green_eo  <= 0; yellow_eo <= 1; red_eo <= 0;
+                                if (count < YELLOW_TIME)
+                                    count <= count + 1;
+                                else begin
+                                    state_eo <= S_RED;
+                                    state_ns <= S_GREEN;
+                                    count <= 0;
+                                end
+                            end
+                            S_RED: begin
+                                green_eo  <= 0; yellow_eo <= 0; red_eo <= 1;
+                                if (count < RED_TIME)
+                                    count <= count + 1;
+                                else begin
+                                    state_ns <= S_GREEN;
+                                    state_eo <= S_RED;
+                                    count <= 0;
+                                end
+                            end
+                        endcase
+                    end
+
+                endcase
+            end
+        end
+    end
+endmodule
