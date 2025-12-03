@@ -1,6 +1,7 @@
 module semaforo_doble_via_ldr_simple (
     input  wire clk,       // 50 MHz
     input  wire rst_n,     // Reset activo bajo
+    input  wire pause,     // Botón PAUSA (toggle)
     input  wire ldr,       // 1 = luz, 0 = oscuro
 
     // SEMÁFOROS NS
@@ -13,11 +14,11 @@ module semaforo_doble_via_ldr_simple (
     output reg yellow_eo,
     output reg red_eo,
 
-    // DISPLAY 7 SEGMENTOS NS (CÁTODO COMÚN)
+    // DISPLAY 7 SEGMENTOS NS
     output reg [6:0] seg_dec,
     output reg [6:0] seg_uni,
 
-    // DISPLAY 7 SEGMENTOS EO (NUEVO – CÁTODO COMÚN)
+    // DISPLAY 7 SEGMENTOS EO
     output reg [6:0] seg_dec_eo,
     output reg [6:0] seg_uni_eo,
 
@@ -31,7 +32,86 @@ module semaforo_doble_via_ldr_simple (
 );
 
     // ============================================================
-    //  Tiempos originales
+    // PAUSA RETENSIVA (TOGGLE) con sincronización y ANTI-REBOTE
+    // ============================================================
+    reg pause_sync_1, pause_sync_2;
+    reg pause_clean;            // señal limpia (debounced)
+    reg pause_clean_last;
+    reg pause_state = 0;
+
+    // sincroniza la señal externa 'pause' a clk para evitar metastabilidad
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            pause_sync_1 <= 1'b0;
+            pause_sync_2 <= 1'b0;
+        end else begin
+            pause_sync_1 <= pause;
+            pause_sync_2 <= pause_sync_1;
+        end
+    end
+
+    // debounce simple: requiere que la señal sincronizada permanezca en 1
+    // por un tiempo para considerarla "pressed". umbral = 1_000_000 (20 ms).
+    reg [19:0] pause_db_cnt = 0;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            pause_db_cnt <= 0;
+            pause_clean <= 1'b0;
+        end else begin
+            if (pause_sync_2) begin
+                if (pause_db_cnt < 1_000_000)
+                    pause_db_cnt <= pause_db_cnt + 1;
+                if (pause_db_cnt == 1_000_000)
+                    pause_clean <= 1'b1;
+            end else begin
+                pause_db_cnt <= 0;
+                pause_clean <= 1'b0;
+            end
+        end
+    end
+
+    // Toggle: detectar flanco limpio (clean rising edge) y alternar pause_state
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            pause_clean_last <= 1'b0;
+            pause_state <= 1'b0;
+        end else begin
+            if (pause_clean && !pause_clean_last)
+                pause_state <= ~pause_state;
+            pause_clean_last <= pause_clean;
+        end
+    end
+
+    // ============================================================
+    // FILTRO LDR (Anti-ruido / estabilización)
+    // ============================================================
+    // ldr_stable = 1 cuando la LDR lleva suficiente tiempo en 1 (luz)
+    // ldr_stable = 0 cuando la LDR lleva suficiente tiempo en 0 (oscuridad)
+    // Umbral ajustable: 2_500_000 ciclos = 50 ms a 50MHz
+    reg [21:0] ldr_cnt = 0;
+    reg ldr_stable = 0;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ldr_cnt    <= 22'd0;
+            ldr_stable <= 1'b0;
+        end else begin
+            if (ldr) begin
+                if (ldr_cnt < 22'd2_500_000)
+                    ldr_cnt <= ldr_cnt + 1;
+                if (ldr_cnt == 22'd2_500_000)
+                    ldr_stable <= 1'b1;
+            end else begin
+                if (ldr_cnt > 0)
+                    ldr_cnt <= ldr_cnt - 1;
+                if (ldr_cnt == 0)
+                    ldr_stable <= 1'b0;
+            end
+        end
+    end
+
+    // ============================================================
+    //  Tiempos originales (sin cambios)
     // ============================================================
     localparam GREEN_TIME  = 36'd3500000000; 
     localparam YELLOW_TIME = 36'd1000000000; 
@@ -49,7 +129,7 @@ module semaforo_doble_via_ldr_simple (
     reg yellow_on;
 
     // ============================================================
-    // DIVISOR 1 HZ
+    // DIVISOR 1 HZ (tick_1s)
     // ============================================================
     reg [25:0] div_count = 0;
     reg tick_1s = 0;
@@ -58,8 +138,8 @@ module semaforo_doble_via_ldr_simple (
         if (!rst_n) begin
             div_count <= 0;
             tick_1s <= 0;
-        end else begin
-            if (div_count == 49999999) begin
+        end else if (!pause_state) begin
+            if (div_count == 26'd49999999) begin
                 div_count <= 0;
                 tick_1s <= 1;
             end else begin
@@ -67,80 +147,83 @@ module semaforo_doble_via_ldr_simple (
                 tick_1s <= 0;
             end
         end
+        // if pause_state == 1 -> div_count and tick_1s keep their values (congelado)
     end
 
     // ============================================================
     // CONTADORES NS
     // ============================================================
-
     reg [7:0] timer_ns = 70;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
-            timer_ns <= 70;
-        else if (ldr == 1 && state_ns == S_GREEN) begin
-            if (tick_1s && timer_ns > 1)
-                timer_ns <= timer_ns - 1;
-        end else
-            timer_ns <= 70;
+            timer_ns <= 8'd70;
+        else if (!pause_state) begin
+            if (ldr_stable == 1'b1 && state_ns == S_GREEN) begin
+                if (tick_1s && timer_ns > 1)
+                    timer_ns <= timer_ns - 1;
+            end else
+                timer_ns <= 8'd70;
+        end
+        // if pause_state == 1 -> timer_ns conserva su valor
     end
 
     reg [7:0] timer_ns_yellow = 20;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
-            timer_ns_yellow <= 20;
-        else if (ldr == 1 && state_ns == S_YELLOW) begin
-            if (tick_1s && timer_ns_yellow > 1)
-                timer_ns_yellow <= timer_ns_yellow - 1;
-        end else
-            timer_ns_yellow <= 20;
+            timer_ns_yellow <= 8'd20;
+        else if (!pause_state) begin
+            if (ldr_stable == 1'b1 && state_ns == S_YELLOW) begin
+                if (tick_1s && timer_ns_yellow > 1)
+                    timer_ns_yellow <= timer_ns_yellow - 1;
+            end else
+                timer_ns_yellow <= 8'd20;
+        end
     end
 
     reg [7:0] timer_ns_red = 90;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
-            timer_ns_red <= 90;
-        else if (ldr == 1 && state_ns == S_RED) begin
-            if (tick_1s && timer_ns_red > 1)
-                timer_ns_red <= timer_ns_red - 1;
-        end else
-            timer_ns_red <= 90;
+            timer_ns_red <= 8'd90;
+        else if (!pause_state) begin
+            if (ldr_stable == 1'b1 && state_ns == S_RED) begin
+                if (tick_1s && timer_ns_red > 1)
+                    timer_ns_red <= timer_ns_red - 1;
+            end else
+                timer_ns_red <= 8'd90;
+        end
     end
 
     // ============================================================
     // CONTADORES EO
     // ============================================================
-
     reg [7:0] timer_eo_green = 70;
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
-            timer_eo_green <= 70;
-        else if (ldr == 1 && state_eo == S_GREEN) begin
-            if (tick_1s && timer_eo_green > 1)
-                timer_eo_green <= timer_eo_green - 1;
-        end else
-            timer_eo_green <= 70;
-    end
-
     reg [7:0] timer_eo_yellow = 20;
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
-            timer_eo_yellow <= 20;
-        else if (ldr == 1 && state_eo == S_YELLOW) begin
-            if (tick_1s && timer_eo_yellow > 1)
-                timer_eo_yellow <= timer_eo_yellow - 1;
-        end else
-            timer_eo_yellow <= 20;
-    end
-
     reg [7:0] timer_eo_red = 90;
+
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n)
-            timer_eo_red <= 90;
-        else if (ldr == 1 && state_eo == S_RED) begin
-            if (tick_1s && timer_eo_red > 1)
-                timer_eo_red <= timer_eo_red - 1;
-        end else
-            timer_eo_red <= 90;
+        if (!rst_n) begin
+            timer_eo_green <= 8'd70;
+            timer_eo_yellow <= 8'd20;
+            timer_eo_red <= 8'd90;
+        end else if (!pause_state) begin
+            if (ldr_stable == 1'b1 && state_eo == S_GREEN) begin
+                if (tick_1s && timer_eo_green > 1)
+                    timer_eo_green <= timer_eo_green - 1;
+            end else
+                timer_eo_green <= 8'd70;
+
+            if (ldr_stable == 1'b1 && state_eo == S_YELLOW) begin
+                if (tick_1s && timer_eo_yellow > 1)
+                    timer_eo_yellow <= timer_eo_yellow - 1;
+            end else
+                timer_eo_yellow <= 8'd20;
+
+            if (ldr_stable == 1'b1 && state_eo == S_RED) begin
+                if (tick_1s && timer_eo_red > 1)
+                    timer_eo_red <= timer_eo_red - 1;
+            end else
+                timer_eo_red <= 8'd90;
+        end
     end
 
     // ============================================================
@@ -195,10 +278,10 @@ module semaforo_doble_via_ldr_simple (
     endfunction
 
     // ============================================================
-    // APAGADO DISPLAY POR LDR (AMBOS)
+    // APAGADO DISPLAY POR LDR (AMBOS) -> usa ldr_stable
     // ============================================================
     always @(*) begin
-        if (ldr == 0) begin
+        if (ldr_stable == 1'b0) begin
             seg_dec = 7'b0000000;
             seg_uni = 7'b0000000;
         end else begin
@@ -208,7 +291,7 @@ module semaforo_doble_via_ldr_simple (
     end
 
     always @(*) begin
-        if (ldr == 0) begin
+        if (ldr_stable == 1'b0) begin
             seg_dec_eo = 7'b0000000;
             seg_uni_eo = 7'b0000000;
         end else begin
@@ -218,7 +301,7 @@ module semaforo_doble_via_ldr_simple (
     end
 
     // ============================================================
-    // LÓGICA DEL SEMÁFORO ORIGINAL
+    // LÓGICA DEL SEMÁFORO ORIGINAL (con pause_state y ldr_stable)
     // ============================================================
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -229,8 +312,9 @@ module semaforo_doble_via_ldr_simple (
             green_ns  <= 1; yellow_ns <= 0; red_ns <= 0;
             green_eo  <= 0; yellow_eo <= 0; red_eo <= 1;
             yellow_on <= 0;
-        end else begin
-            if (ldr == 0) begin
+        end else if (!pause_state) begin
+            if (ldr_stable == 1'b0) begin
+                // Modo nocturno (oscuro): amarillo parpadeante
                 if (count < BLINK_TIME)
                     count <= count + 1;
                 else begin
@@ -246,6 +330,7 @@ module semaforo_doble_via_ldr_simple (
                 yellow_eo <= yellow_on;
 
             end else begin
+                // Modo normal diurno
                 case (state_ns)
 
                     S_GREEN: begin
@@ -313,13 +398,14 @@ module semaforo_doble_via_ldr_simple (
                 endcase
             end
         end
+        // if pause_state == 1 -> todo dentro del else if (!pause_state) se congela (se mantienen registros)
     end
 
     // ============================================================
-    // LUCES PEATONALES NS
+    // LUCES PEATONALES NS (usa ldr_stable)
     // ============================================================
     always @(*) begin
-        if (ldr == 0) begin
+        if (ldr_stable == 1'b0) begin
             ped_ns_verde = 0;
             ped_ns_rojo  = 0;
         end else begin
@@ -342,10 +428,10 @@ module semaforo_doble_via_ldr_simple (
     end
 
     // ============================================================
-    // LUCES PEATONALES EO
+    // LUCES PEATONALES EO (usa ldr_stable)
     // ============================================================
     always @(*) begin
-        if (ldr == 0) begin
+        if (ldr_stable == 1'b0) begin
             ped_eo_verde = 0;
             ped_eo_rojo  = 0;
         end else begin
